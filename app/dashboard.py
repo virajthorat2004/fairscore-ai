@@ -230,14 +230,10 @@ def ai_card(r):
         f'<span style="left:{scale(amax):.1f}%">auto-approve up to {100 * amax:.1f}%</span>'
         f'<span style="left:{scale(dmin):.1f}%">decline from {100 * dmin:.0f}%</span>'
         f'<span style="left:100%;transform:translateX(-100%)">60%</span></div>'
-        f'<div class="muted" style="margin-top:8px">Certainty uses conformal prediction: the AI decides alone only '
-        f'when it can rule out the other outcome at {100 * (1 - ai["alpha"]):.0f}% confidence, so at most '
-        f'{100 * ai["alpha"]:.0f}% of would-be defaulters can ever be auto-approved. '
-        f'Risk-based rate {100 * ai["risk_based_rate"]:.1f}% a year · expected loss {money(ai["expected_loss"])} '
-        f'(probability of default × {ai["lgd"]:.0%} loss if it happens × amount).'
+        f'<div class="muted" style="margin-top:8px">Risk-based rate {100 * ai["risk_based_rate"]:.1f}% a year · '
+        f'expected loss {money(ai["expected_loss"])}'
         + (f'<br><b>Security:</b> covers {100 * ai["secured_coverage"]:.0f}% of the loan, so the loss if the borrower '
-           f'defaults falls from {ai["lgd_unsecured"]:.0%} to {ai["lgd"]:.0%}; the AI may then accept a higher '
-           f'probability of default as long as the expected loss stays within the bank\'s appetite.'
+           f'defaults falls from {ai["lgd_unsecured"]:.0%} to {ai["lgd"]:.0%}.'
            if ai.get("secured_coverage") else "")
         + (f'<br><b>Note:</b> {note}.' if note else "") + '</div></div></div></div>', unsafe_allow_html=True)
 
@@ -252,10 +248,10 @@ def why_chart(r):
     g = g[g["impact"].abs() > 0.01]
     if g.empty:
         return
+    g = g.reindex(g["impact"].abs().sort_values(ascending=False).index).head(6)
     g["Effect"] = g["impact"].map(lambda v: "raises risk" if v > 0 else "lowers risk")
     g["label"] = g["group"]
-    st.markdown('<p class="eyebrow">Why · what the AI weighed (SHAP contributions, log-odds of default)</p>',
-                unsafe_allow_html=True)
+    st.markdown('<p class="eyebrow">Why · what the AI weighed most (SHAP)</p>', unsafe_allow_html=True)
     ch = alt.Chart(g).mark_bar(cornerRadius=2).encode(
         y=alt.Y("label:N", sort=alt.EncodingSortField("impact", op="sum", order="descending"), title=None,
                 axis=alt.Axis(labelLimit=260)),
@@ -264,13 +260,13 @@ def why_chart(r):
                                                      range=["#9E3A2E", "#2E6B4F"]), legend=None),
         tooltip=["group", "evidence", alt.Tooltip("impact:Q", format=".2f")]).properties(height=34 * len(g) + 20)
     st.altair_chart(ch, width="stretch")
-    st.caption(" · ".join(f"{row.group}: {row.evidence}" for row in g.head(4).itertuples()))
 
 
 def recourse_ai(r):
+    """What would change the AI's decision: each option re-checked by the model. Returns plain strings."""
     rc = (r.get("ai") or {}).get("recourse")
     if not rc or rc.get("error"):
-        return
+        return []
     items = []
     if rc.get("loan"):
         L = rc["loan"]
@@ -283,10 +279,7 @@ def recourse_ai(r):
         items.append(" + ".join(h["combined"]["changes"]) + f': risk falls to {100 * h["combined"]["new_pd"]:.1f}%')
     for x in h.get("closest") or []:
         items.append(f'{x["change"]}: risk would fall to {100 * x["new_pd"]:.1f}% (not yet enough alone)')
-    if items:
-        st.markdown('<p class="eyebrow">What would change the AI\'s decision · each option re-checked by the model</p>',
-                    unsafe_allow_html=True)
-        st.markdown("".join(f'<span class="chip">{x}</span>' for x in items), unsafe_allow_html=True)
+    return items
 
 
 def starter_card(r, a):
@@ -304,15 +297,12 @@ def starter_card(r, a):
         f'<p class="eyebrow">Starter-loan ladder · FAIRScore 3.0</p>'
         f'<div class="card ai" style="border-top-color:var(--safe)"><span class="badge {cls}">{s["label"]}</span>'
         f'<div style="margin:6px 0 2px;font-size:15px"><b>{money(s["amount"])}</b> over {s["term"]} months · EMI '
-        f'{money(s["emi"])} at {100 * s["rate"]:.1f}% (risk-based) · default risk at this size {100 * s["pd"]:.1f}% · '
-        f'expected loss {money(s["expected_loss"])}</div>'
+        f'{money(s["emi"])} at {100 * s["rate"]:.1f}% · default risk at this size {100 * s["pd"]:.1f}%</div>'
         f'<div class="ladder">{steps}</div>'
-        f'<div class="muted" style="margin-top:6px">The requested {money(a["requested_amount"])} stays referred. Each repaid '
-        f'starter loan is reported to the credit bureaus, so the applicant builds the credit history that most lenders '
-        f'ask for.'
-        + (f' This is a <b>learning offer</b>: a random {100 * s["propensity"]:.0f}% of similar cases get one, and the '
-           f'outcome is weighted by 1/{s["propensity"]:.2f} when the AI is recalibrated, so it learns about people its '
-           f'policy would otherwise never see.' if s["kind"] == "learning" else "")
+        f'<div class="muted" style="margin-top:6px">The requested {money(a["requested_amount"])} stays referred. '
+        f'Repaying builds a credit-bureau history.'
+        + (f' This is a <b>learning offer</b> (a random {100 * s["propensity"]:.0f}% of similar cases get one), so the '
+           f'AI learns about people it would otherwise never see.' if s["kind"] == "learning" else "")
         + '</div></div>', unsafe_allow_html=True)
 
 
@@ -516,8 +506,7 @@ with tab_assess:
                         f'<div class="sub">{sub}</div>'
                         f'{"<ul>" + reasons + "</ul>" if reasons else ""}{cond_html}'
                         f'{meta_line(r)}'
-                        f'<div class="ref">Reference {saved["ref"]} · statement {saved["source"]} · '
-                        f'policy {r.get("policy_version", "")}</div></div>',
+                        f'<div class="ref">Reference {saved["ref"]} · statement {saved["source"]}</div></div>',
                         unsafe_allow_html=True)
 
             if r.get("consistency") == "conflict" and saved.get("detected_loans"):
@@ -526,10 +515,8 @@ with tab_assess:
                           on_click=confirm_loans, args=(max(n, int(a["active_credit_lines"] or 0)),),
                           type="primary", width="stretch")
 
-            compare_card(r)
             ai_card(r)
             why_chart(r)
-            recourse_ai(r)
             starter_card(r, a)
 
             # --- 2. key numbers
@@ -555,54 +542,22 @@ with tab_assess:
                 f'<div class="t-sub">{s_}</div></div>' for t, v, s_, cls in tiles) + "</div>",
                 unsafe_allow_html=True)
 
-            # --- 2b. FAIRScore + eligibility + offer
+            # --- 3. counter-offer, if the bank can lend a smaller amount
             fs, elig, offer = r.get("fairscore"), r.get("eligibility") or {}, r.get("offer")
-            if fs:
-                pos = (fs["score"] - 300) / 6
-                weakest = [f for f in fs["factors"] if f["points"] < f["max"]][:4]
-                strongest = sorted(fs["factors"], key=lambda f: f["points"] / max(f["max"], 1), reverse=True)[:3]
-                rows_w = "".join(f'<div class="frow"><span>{f["label"]}</span><span class="mono">{f["points"]}/{f["max"]}'
-                                 f'</span><span class="muted">{f["reason"]}</span></div>' for f in weakest) \
-                    or '<div class="muted">Full points on every factor</div>'
-                rows_s = "".join(f'<div class="frow"><span>{f["label"]}</span><span class="mono">{f["points"]}/{f["max"]}'
-                                 f'</span><span class="muted">{f["reason"]}</span></div>' for f in strongest)
-                band_cls = {"Excellent": "lvl-low", "Good": "lvl-low", "Fair": "lvl-moderate", "Weak": "lvl-elevated",
-                            "Poor": "lvl-high"}.get(fs["band"], "lvl-moderate")
-                elig_txt = ""
-                if elig:
-                    amt = elig.get("eligible_amount") or 0
-                    elig_txt = (f'<div style="margin-top:10px"><b>Eligible amount:</b> {money(amt)} over '
-                                f'{elig.get("term", a["requested_duration_months"])} months'
-                                f'<span class="muted"> · binding limit: {elig.get("binding", "")}</span></div>')
-                if offer:
-                    o = offer[0]
-                    elig_txt += (f'<div style="margin-top:6px"><b>Counter-offer:</b> approvable at {money(o["amount"])} '
-                                 f'over {o["term"]} months (EMI {money(o["emi"])})</div>')
-                st.markdown('<p class="eyebrow">FAIRScore (300-900) · expert scorecard: its 12 behaviour scores are also inputs to the AI</p>',
+            if offer and r["verdict"] != "approve":
+                o = offer[0]
+                st.markdown(f'<div class="card" style="padding:10px 16px"><b>Counter-offer:</b> approvable at '
+                            f'{money(o["amount"])} over {o["term"]} months (EMI {money(o["emi"])})</div>',
                             unsafe_allow_html=True)
-                st.markdown(
-                    f'<div class="card"><div class="lvl-row"><span class="lvl {band_cls}">{fs["score"]}</span>'
-                    f'<span><b>{fs["band"]}</b> · every point comes from the statement or the application; no age, '
-                    f'gender or bureau data</span></div>'
-                    f'<div class="meter" style="background:linear-gradient(90deg,var(--risk-soft) 0 50%,var(--gold-soft) 50% 58%,'
-                    f'#E7EEF4 58% 67%,var(--safe-soft) 67% 100%)"><div class="dot" style="left:calc({pos:.0f}% - 2px)"></div></div>'
-                    f'<div class="meter-scale" style="grid-template-columns:50% 8% 9% 33%"><span>Poor</span><span>Weak</span>'
-                    f'<span>Fair</span><span>Good / Excellent</span></div>'
-                    f'<div class="fgrid"><div><div class="eyebrow">Weakest factors</div>{rows_w}</div>'
-                    f'<div><div class="eyebrow">Strongest factors</div>{rows_s}</div></div>{elig_txt}</div>',
-                    unsafe_allow_html=True)
 
-            # --- 3. what would help
-            if r["recourse"]:
+            # --- 4. what would help (AI re-checked options first, then policy suggestions)
+            helps = recourse_ai(r)[:3]
+            helps += [x["change"] for x in (r["recourse"] or []) if x["change"] not in helps][:max(0, 4 - len(helps))]
+            if helps:
                 st.markdown('<p class="eyebrow">What would help</p>', unsafe_allow_html=True)
-                st.markdown("".join(f'<span class="chip">{x["change"]}</span>' for x in r["recourse"]),
-                            unsafe_allow_html=True)
+                st.markdown("".join(f'<span class="chip">{x}</span>' for x in helps), unsafe_allow_html=True)
 
-            if r.get("documents"):
-                st.markdown('<p class="eyebrow">Documents to collect before sanction</p>', unsafe_allow_html=True)
-                st.markdown("".join(f'<span class="chip">{d}</span>' for d in r["documents"]), unsafe_allow_html=True)
-
-            # --- 4. checks
+            # --- 5. lending checks: only the ones that need attention are shown here
             def _rows(cs):
                 return "".join(
                     f'<div class="check"><span class="pill {c["status"]}">{STATUS_WORD[c["status"]]}</span>'
@@ -612,41 +567,70 @@ with tab_assess:
             n_all = len(pol["checks"])
             head = (f"all {n_all} passed" if not flagged else
                     f"{len(flagged)} need{'s' if len(flagged) == 1 else ''} attention, {n_all - len(flagged)} passed")
-            st.markdown(f'<p class="eyebrow">Lending checks · {head}</p>',
-                        unsafe_allow_html=True)
+            st.markdown(f'<p class="eyebrow">Lending checks · {head}</p>', unsafe_allow_html=True)
             if flagged:
                 st.markdown(f'<div class="card">{_rows(flagged)}</div>', unsafe_allow_html=True)
-            with st.expander(f"See all {len(pol['checks'])} checks"):
+
+            # --- 6. everything else, for the credit officer, in one place
+            with st.expander("Full details: scorecard, all checks, statement summary, documents"):
+                if fs:
+                    pos = (fs["score"] - 300) / 6
+                    weakest = [f for f in fs["factors"] if f["points"] < f["max"]][:4]
+                    strongest = sorted(fs["factors"], key=lambda f: f["points"] / max(f["max"], 1), reverse=True)[:3]
+                    rows_w = "".join(f'<div class="frow"><span>{f["label"]}</span><span class="mono">{f["points"]}/{f["max"]}'
+                                     f'</span><span class="muted">{f["reason"]}</span></div>' for f in weakest) \
+                        or '<div class="muted">Full points on every factor</div>'
+                    rows_s = "".join(f'<div class="frow"><span>{f["label"]}</span><span class="mono">{f["points"]}/{f["max"]}'
+                                     f'</span><span class="muted">{f["reason"]}</span></div>' for f in strongest)
+                    band_cls = {"Excellent": "lvl-low", "Good": "lvl-low", "Fair": "lvl-moderate", "Weak": "lvl-elevated",
+                                "Poor": "lvl-high"}.get(fs["band"], "lvl-moderate")
+                    st.markdown('<p class="eyebrow">FAIRScore (300-900) · expert scorecard, also an input to the AI</p>',
+                                unsafe_allow_html=True)
+                    st.markdown(
+                        f'<div class="card"><div class="lvl-row"><span class="lvl {band_cls}">{fs["score"]}</span>'
+                        f'<span><b>{fs["band"]}</b> · from the statement and the application only; no age, '
+                        f'gender or bureau data</span></div>'
+                        f'<div class="meter" style="background:linear-gradient(90deg,var(--risk-soft) 0 50%,var(--gold-soft) 50% 58%,'
+                        f'#E7EEF4 58% 67%,var(--safe-soft) 67% 100%)"><div class="dot" style="left:calc({pos:.0f}% - 2px)"></div></div>'
+                        f'<div class="meter-scale" style="grid-template-columns:50% 8% 9% 33%"><span>Poor</span><span>Weak</span>'
+                        f'<span>Fair</span><span>Good / Excellent</span></div>'
+                        f'<div class="fgrid"><div><div class="eyebrow">Weakest factors</div>{rows_w}</div>'
+                        f'<div><div class="eyebrow">Strongest factors</div>{rows_s}</div></div></div>',
+                        unsafe_allow_html=True)
+
+                st.markdown(f'<p class="eyebrow">All {n_all} lending checks</p>', unsafe_allow_html=True)
                 st.markdown(f'<div class="card">{_rows(pol["checks"])}</div>', unsafe_allow_html=True)
 
-            # --- 5. what the statement shows (plain language)
-            if r.get("statement_insights"):
-                st.markdown('<p class="eyebrow">What the bank statement shows</p>', unsafe_allow_html=True)
-                st.markdown('<div class="card">' + "".join(f'<div class="factor">• {x}</div>'
-                                                           for x in r["statement_insights"]) + '</div>',
-                            unsafe_allow_html=True)
+                if r.get("statement_insights"):
+                    st.markdown('<p class="eyebrow">What the bank statement shows</p>', unsafe_allow_html=True)
+                    st.markdown('<div class="card">' + "".join(f'<div class="factor">• {x}</div>'
+                                                               for x in r["statement_insights"]) + '</div>',
+                                unsafe_allow_html=True)
 
-            # --- 6b. month-wise banking summary (as in a credit appraisal)
-            monthly = (r.get("banking") or {}).get("monthly")
-            if monthly:
-                with st.expander("Month-wise banking summary"):
+                monthly = (r.get("banking") or {}).get("monthly")
+                if monthly:
+                    st.markdown('<p class="eyebrow">Month-wise banking summary</p>', unsafe_allow_html=True)
                     mdf = pd.DataFrame(monthly)
-                    keep = [c for c in ["month", "income_counted", "credits", "debits", "emis", "investments",
-                                        "cash_withdrawals", "abb", "min_balance", "closing_balance", "bounces",
-                                        "transactions"] if c in mdf.columns]
+                    keep = [c for c in ["month", "income_counted", "emis", "abb", "min_balance", "closing_balance",
+                                        "bounces"] if c in mdf.columns]
                     st.dataframe(mdf[keep], hide_index=True, width="stretch", column_config={
-                        "month": "Month", "income_counted": st.column_config.NumberColumn("Income counted (₹)", format="%d"),
-                        "credits": st.column_config.NumberColumn("All credits (₹)", format="%d"),
-                        "debits": st.column_config.NumberColumn("All debits (₹)", format="%d"),
+                        "month": "Month", "income_counted": st.column_config.NumberColumn("Income (₹)", format="%d"),
                         "emis": st.column_config.NumberColumn("EMIs (₹)", format="%d"),
-                        "investments": st.column_config.NumberColumn("Investments (₹)", format="%d"),
-                        "cash_withdrawals": st.column_config.NumberColumn("Cash withdrawn (₹)", format="%d"),
                         "abb": st.column_config.NumberColumn("Average balance (₹)", format="%d"),
                         "min_balance": st.column_config.NumberColumn("Lowest balance (₹)", format="%d"),
-                        "closing_balance": st.column_config.NumberColumn("Month-end balance (₹)", format="%d"),
-                        "bounces": "Bounces", "transactions": "Transactions"})
-                    st.caption("Average balance = mean of the day-end balances (ABB), as banks compute it. "
-                               "Partial first / last months are shown but not used for averages.")
+                        "closing_balance": st.column_config.NumberColumn("Month-end (₹)", format="%d"),
+                        "bounces": "Bounces"})
+
+                if r.get("documents"):
+                    st.markdown('<p class="eyebrow">Documents to collect before sanction</p>', unsafe_allow_html=True)
+                    st.markdown("".join(f'<span class="chip">{d}</span>' for d in r["documents"]),
+                                unsafe_allow_html=True)
+
+                v1 = r.get("v1_verdict")
+                if v1:
+                    lab = {"approve": "Approve", "refer": "Refer", "decline": "Decline"}
+                    st.caption(f"Rules alone (version 1) would say: {lab[v1]} · with the AI (version 2): "
+                               f"{lab[r['verdict']]} · policy {r.get('policy_version', '')}")
 
             # --- 7. what-if
             with st.expander("Try a different amount or term"):
@@ -690,30 +674,35 @@ def _csv(name):
 with tab_evidence:
     import altair as alt
     met, dec, conf = _csv("ai_engine_metrics.csv"), _csv("ai_engine_decisions.csv"), _csv("ai_engine_conformal.csv")
-    trade, fair, prof = _csv("ai_engine_tradeoff.csv"), _csv("ai_engine_fairness.csv"), _csv("ai_engine_profit.csv")
-    seqm, ftrade = _csv("seq_model_metrics.csv"), _csv("ai_engine_fairness_tradeoff.csv")
+    trade, fair = _csv("ai_engine_tradeoff.csv"), _csv("ai_engine_fairness.csv")
+    seqm, ftrade, sl = _csv("seq_model_metrics.csv"), _csv("ai_engine_fairness_tradeoff.csv"), _csv("starter_ladder_evidence.csv")
+    zoo, roc_, cal_, cm_, sig_, shg = (_csv("model_zoo.csv"), _csv("eval_roc.csv"), _csv("eval_calibration.csv"),
+                                       _csv("eval_confusion.csv"), _csv("eval_v1_v2_bootstrap.csv"),
+                                       _csv("eval_shap_global.csv"))
+    pct = lambda cols: {c_: st.column_config.NumberColumn(format="percent") for c_ in cols}
     if met is None or dec is None:
         st.info("Run python src/train_ai_engine.py to produce the evidence.")
     else:
         st.markdown("### How good is the AI? Tested on 679 real loans it never saw while learning")
-        st.caption("Berka bank data: each loan's 6-month pre-loan bank statement, rebuilt and read by FAIRScore's "
-                   "own reader, and what actually happened to the loan (73 defaulted). Nested cross-validation: "
-                   "the model, its calibration, the conformal scores and the approval threshold are all re-learned "
-                   "without the loans being tested.")
+        st.caption("Each loan's 6-month bank statement before the loan, and whether it was repaid (73 defaulted). "
+                   "Nested cross-validation: every loan is judged by a model that never saw it.")
         g = lambda v, s_: dec[(dec.version == v) & (dec.verdict == s_)].iloc[0]
         a1, a2, r1, r2 = g("v1", "approve"), g("v2", "approve"), g("v1", "refer"), g("v2", "refer")
         m0 = met.iloc[0]
-        p1 = prof.set_index("version").loc["v1", "profit_per_100_applicants_per_rupee"] if prof is not None else None
-        p2 = prof.set_index("version").loc["v2", "profit_per_100_applicants_per_rupee"] if prof is not None else None
+        offered = None
+        if sl is not None:
+            offered = sl.set_index("group").loc["offered credit today: approval or starter (version 3)", "share_of_applicants"]
         st.markdown(
-            f'<div class="kpi"><div><b>{m0.auc:.2f}</b><span>AUC (95% interval {m0.auc_ci_low:.2f}-{m0.auc_ci_high:.2f}); '
-            f'Gini {m0.gini:.2f}</span></div>'
-            f'<div><b>{a2.share:.0%}</b><span>approved by version 2, {a2.default_rate:.1%} of them defaulted '
-            f'(version 1: {a1.share:.0%} at {a1.default_rate:.1%})</span></div>'
-            f'<div><b>{r2.share:.0%}</b><span>sent to an officer (version 1: {r1.share:.0%})</span></div>'
-            + (f'<div><b>+{(p2 / p1 - 1):.0%}</b><span>lender profit vs version 1 (indicative)</span></div>' if p1 else "")
+            f'<div class="kpi"><div><b>{m0.auc:.2f}</b><span>AUC (95% interval {m0.auc_ci_low:.2f}-{m0.auc_ci_high:.2f})'
+            f'</span></div>'
+            f'<div><b>{a2.share:.0%}</b><span>approved, {a2.default_rate:.1%} of them defaulted '
+            f'(rules alone: {a1.share:.0%} at {a1.default_rate:.1%})</span></div>'
+            f'<div><b>{r2.share:.0%}</b><span>sent to an officer (rules alone: {r1.share:.0%})</span></div>'
+            + (f'<div><b>{offered:.0%}</b><span>offered some credit today, with starter loans '
+               f'(approvals only: {a2.share:.0%})</span></div>' if offered is not None else "")
             + '</div>', unsafe_allow_html=True)
 
+        # 1. the decision result: more approvals at lower risk, and why rules + AI together
         c1, c2 = st.columns(2)
         with c1:
             st.markdown("#### More approvals at lower risk")
@@ -728,43 +717,67 @@ with tab_evidence:
                 color=alt.Color("ranking:N", title=None, scale=alt.Scale(range=["#9E3A2E", "#2E6B4F"])),
                 tooltip=["ranking", alt.Tooltip("approval_rate:Q", format=".0%"), alt.Tooltip("default_rate:Q", format=".1%")])
             st.altair_chart((line + dots).resolve_scale(color="independent").properties(height=300), width="stretch")
-            st.caption("Lower and further right is better. Diamonds: the actual decisions of version 1 (rules) "
-                       "and version 2 (AI).")
+            st.caption("Lower and further right is better. Diamonds: the actual decisions of rules only (version 1) "
+                       "and rules + AI (version 2).")
         with c2:
-            st.markdown("#### Model comparison")
-            show = met.copy()
-            show["AUC"] = show.apply(lambda r_: f"{r_.auc:.3f}" + (f" ({r_.auc_ci_low:.2f}-{r_.auc_ci_high:.2f})"
-                                                                   if pd.notna(r_.auc_ci_low) else ""), axis=1)
-            show["model"] = show["model"].str.replace(" (knowledge-guided monotone CatBoost, calibrated)", "", regex=False)
-            st.dataframe(show[["model", "AUC", "brier", "ece"]].rename(columns={
-                "model": "Model", "brier": "Brier (lower = better)", "ece": "Calibration error"}),
-                hide_index=True, width="stretch", column_config={
-                    "Brier (lower = better)": st.column_config.NumberColumn(format="%.3f"),
-                    "Calibration error": st.column_config.NumberColumn(format="%.3f")})
-            if seqm is not None:
-                st.markdown("#### Deep learning on raw transactions")
-                st.dataframe(seqm.rename(columns={"model": "Model", "auc": "AUC", "auc_sd": "± sd", "folds": "Folds"}),
-                             hide_index=True, width="stretch",
-                             column_config={"AUC": st.column_config.NumberColumn(format="%.3f"),
-                                            "± sd": st.column_config.NumberColumn(format="%.3f")})
-                st.caption("A GRU encoder pre-trained without labels (contrastive learning) on the transaction "
-                           "histories of all 4,500 Berka accounts, then used on each loan's pre-loan statement.")
+            st.markdown("#### Rules + AI vs AI alone vs rules alone")
+            d3 = dec[dec.version.isin(["v1", "ai_only", "v2"])].pivot_table(index="version", columns="verdict",
+                                                                            values="share").reindex(["v1", "ai_only", "v2"])
+            dr = dec[(dec.version.isin(["v1", "ai_only", "v2"])) & (dec.verdict == "approve")].set_index("version")["default_rate"]
+            d3["Default rate among approved"] = dr
+            d3.index = ["Rules only", "AI only", "Rules + AI (FAIRScore)"]
+            st.dataframe(d3[["approve", "refer", "decline", "Default rate among approved"]].rename(
+                columns={"approve": "Approved", "refer": "Referred", "decline": "Declined"}), width="stretch",
+                column_config=pct(["Approved", "Referred", "Declined", "Default rate among approved"]))
+            st.caption("On risk the AI alone does about as well, but on the forged sample statements it would approve "
+                       "5 of 7: an edited statement looks like a good borrower. Rules catch fraud and protect the "
+                       "borrower; the AI measures risk.")
 
+        # 2. standard evaluation
+        if zoo is not None:
+            c1, c2 = st.columns(2)
+            with c1:
+                st.markdown("#### ROC curves")
+                st.altair_chart((alt.Chart(roc_).mark_line().encode(
+                    x=alt.X("fpr:Q", title="Repayers wrongly flagged (false positive rate)"),
+                    y=alt.Y("tpr:Q", title="Defaulters caught (true positive rate)"),
+                    color=alt.Color("model:N", title=None, legend=alt.Legend(orient="bottom")))
+                    + alt.Chart(pd.DataFrame({"x": [0, 1], "y": [0, 1]})).mark_line(strokeDash=[4, 4], color="#999")
+                    .encode(x="x:Q", y="y:Q")).properties(height=280), width="stretch")
+            with c2:
+                st.markdown("#### Calibration: predicted vs actual")
+                st.altair_chart((alt.Chart(cal_).mark_line(point=True, color="#16324A").encode(
+                    x=alt.X("predicted:Q", title="Predicted probability of default", axis=alt.Axis(format="%")),
+                    y=alt.Y("observed:Q", title="Actual default rate", axis=alt.Axis(format="%")),
+                    tooltip=[alt.Tooltip("predicted:Q", format=".1%"), alt.Tooltip("observed:Q", format=".1%"), "loans"])
+                    + alt.Chart(pd.DataFrame({"x": [0, 0.6], "y": [0, 0.6]})).mark_line(strokeDash=[4, 4], color="#999")
+                    .encode(x="x:Q", y="y:Q")).properties(height=280), width="stretch")
+                st.caption("Close to the dashed line: when the AI says 4%, about 4 in 100 such borrowers defaulted.")
+
+            st.markdown("#### Nine algorithms on the same data")
+            z = zoo[["model", "auc_mean", "auc_ci_low", "auc_ci_high", "gini", "ks", "overfit_gap", "delong_p"]].copy()
+            z["95% interval"] = z.apply(lambda r_: f"{r_.auc_ci_low:.2f}-{r_.auc_ci_high:.2f}", axis=1)
+            st.dataframe(z[["model", "auc_mean", "95% interval", "gini", "ks", "overfit_gap", "delong_p"]].rename(
+                columns={"model": "Algorithm", "auc_mean": "AUC", "gini": "Gini", "ks": "KS",
+                         "overfit_gap": "Overfit gap", "delong_p": "p vs deployed (DeLong)"}),
+                hide_index=True, width="stretch",
+                column_config={c_: st.column_config.NumberColumn(format="%.3f") for c_ in
+                               ["AUC", "Gini", "KS", "Overfit gap", "p vs deployed (DeLong)"]})
+            st.caption("The deployed monotone CatBoost ties the best algorithms (p > 0.1) with the smallest overfitting "
+                       "among the boosted models, and beats a single tree, the expert scorecard and a neural network.")
+
+        # 3. uncertainty and fairness
         c1, c2 = st.columns(2)
         with c1:
             st.markdown("#### Guaranteed uncertainty (conformal prediction)")
             cf = conf.copy()
-            cf["Significance"] = cf.alpha.map(lambda a_: f"{a_:.0%}")
-            st.dataframe(cf[["Significance", "coverage_defaulters", "defaulters_auto_approved", "auto_approve_share",
-                             "default_rate_auto_approved", "uncertain_share"]].rename(columns={
-                "coverage_defaulters": "Defaulters flagged as possible", "defaulters_auto_approved": "Defaulters auto-approved",
-                "auto_approve_share": "Auto-approved", "default_rate_auto_approved": "Default rate auto-approved",
-                "uncertain_share": "Uncertain (to officer)"}), hide_index=True, width="stretch",
-                column_config={c_: st.column_config.NumberColumn(format="percent") for c_ in
-                               ["Defaulters flagged as possible", "Defaulters auto-approved", "Auto-approved",
-                                "Default rate auto-approved", "Uncertain (to officer)"]})
-            st.caption("The guarantee: at significance a, at most a of the borrowers who default can be "
-                       "auto-approved. Measured: within the bound at every level. FAIRScore uses 10%.")
+            cf["Significance"] = cf.alpha.map(lambda a_: f"{a_:.0%}" + (" (used)" if abs(a_ - 0.10) < 1e-9 else ""))
+            st.dataframe(cf[["Significance", "defaulters_auto_approved", "auto_approve_share", "uncertain_share"]].rename(
+                columns={"defaulters_auto_approved": "Defaulters auto-approved", "auto_approve_share": "Auto-approved",
+                         "uncertain_share": "Sent to officer"}), hide_index=True, width="stretch",
+                column_config=pct(["Defaulters auto-approved", "Auto-approved", "Sent to officer"]))
+            st.caption("The promise: at 10%, at most 10% of borrowers who default can be auto-approved. "
+                       "Measured: within the limit at every level.")
         with c2:
             st.markdown("#### Fairness on real outcomes")
             if fair is not None:
@@ -773,311 +786,257 @@ with tab_evidence:
                 f2.columns = ["Attribute", "Group", "Version 1", "Version 2"]
                 f2["Attribute"] = f2["Attribute"].str.replace("_", " ").str.capitalize()
                 st.dataframe(f2, hide_index=True, width="stretch", column_config={
-                    "Version 1": st.column_config.NumberColumn("Repayers approved · v1", format="percent"),
-                    "Version 2": st.column_config.NumberColumn("Repayers approved · v2", format="percent")})
-                st.caption("Equal opportunity: of the people who DID repay, how many each version approves. "
-                           "Gender and age are never model inputs. Age is used only for the legal age limit.")
-            if ftrade is not None:
-                with st.expander("Fairness-constrained training (equalized odds) vs the deployed model"):
-                    ft = ftrade.rename(columns={"attribute": "Attribute", "variant": "Model", "auc": "AUC",
-                                                "eo_gap": "Equalized-odds gap", "approval_gap_repayers": "Repayer approval gap",
-                                                "dp_ratio": "Approval-rate ratio", "default_rate_approved": "Default rate approved"})
-                    st.dataframe(ft, hide_index=True, width="stretch", column_config={
-                        c_: st.column_config.NumberColumn(format="%.3f") for c_ in
-                        ["AUC", "Equalized-odds gap", "Repayer approval gap", "Approval-rate ratio", "Default rate approved"]})
-                    st.caption("Forcing equal error rates during training (fairlearn exponentiated gradient) cost "
-                               "most of the accuracy and tripled defaults among approved loans, while the "
-                               "unconstrained model already treats groups similarly. The deployed model is "
-                               "unconstrained, and outcomes are monitored by group.")
-        zoo, roc_, cal_, cm_, sig_, shg, tun = (_csv("model_zoo.csv"), _csv("eval_roc.csv"), _csv("eval_calibration.csv"),
-                                               _csv("eval_confusion.csv"), _csv("eval_v1_v2_bootstrap.csv"),
-                                               _csv("eval_shap_global.csv"), _csv("model_tuning.csv"))
-        if zoo is not None:
-            st.markdown("#### Standard evaluation")
+                    "Version 1": st.column_config.NumberColumn("Repayers approved · rules", format="percent"),
+                    "Version 2": st.column_config.NumberColumn("Repayers approved · rules + AI", format="percent")})
+                st.caption("Of the people who DID repay, how many each group gets approved. "
+                           "Gender and age are never inputs to the AI.")
+
+        # 4. what drives the model, and errors at the decision
+        if shg is not None and cm_ is not None:
             c1, c2 = st.columns(2)
             with c1:
-                st.markdown("**ROC curves** (out-of-fold)")
-                st.altair_chart((alt.Chart(roc_).mark_line().encode(
-                    x=alt.X("fpr:Q", title="Repayers wrongly flagged (false positive rate)"),
-                    y=alt.Y("tpr:Q", title="Defaulters caught (true positive rate)"),
-                    color=alt.Color("model:N", title=None, legend=alt.Legend(orient="bottom")))
-                    + alt.Chart(pd.DataFrame({"x": [0, 1], "y": [0, 1]})).mark_line(strokeDash=[4, 4], color="#999")
-                    .encode(x="x:Q", y="y:Q")).properties(height=280), width="stretch")
-            with c2:
-                st.markdown("**Calibration** (predicted vs actual default rate, by decile)")
-                st.altair_chart((alt.Chart(cal_).mark_line(point=True, color="#16324A").encode(
-                    x=alt.X("predicted:Q", title="Predicted probability of default", axis=alt.Axis(format="%")),
-                    y=alt.Y("observed:Q", title="Actual default rate", axis=alt.Axis(format="%")),
-                    tooltip=[alt.Tooltip("predicted:Q", format=".1%"), alt.Tooltip("observed:Q", format=".1%"), "loans"])
-                    + alt.Chart(pd.DataFrame({"x": [0, 0.6], "y": [0, 0.6]})).mark_line(strokeDash=[4, 4], color="#999")
-                    .encode(x="x:Q", y="y:Q")).properties(height=280), width="stretch")
-            st.markdown("**Nine algorithms, same folds** (5-fold x 3 repeats; DeLong test against the deployed model)")
-            z = zoo[["model", "auc_mean", "auc_ci_low", "auc_ci_high", "gini", "ks", "pr_auc", "brier", "train_auc",
-                     "overfit_gap", "delong_p"]].copy()
-            st.dataframe(z.rename(columns={"model": "Algorithm", "auc_mean": "AUC", "auc_ci_low": "95% low",
-                                           "auc_ci_high": "95% high", "gini": "Gini", "ks": "KS", "pr_auc": "PR-AUC",
-                                           "brier": "Brier", "train_auc": "Train AUC", "overfit_gap": "Overfit gap",
-                                           "delong_p": "DeLong p vs deployed"}),
-                         hide_index=True, width="stretch",
-                         column_config={c_: st.column_config.NumberColumn(format="%.3f") for c_ in
-                                        ["AUC", "95% low", "95% high", "Gini", "KS", "PR-AUC", "Brier", "Train AUC",
-                                         "Overfit gap", "DeLong p vs deployed"]})
-            st.caption("The deployed monotone CatBoost ties the best algorithms (p > 0.1) with the smallest overfitting "
-                       "gap among the boosted models, and is significantly better than a single tree, the expert "
-                       "scorecard and a neural network (too little data for one). Tuning: AUC 0.848-0.864 over 12 settings "
-                       "of depth, trees and learning rate - the result does not hinge on tuning.")
-            c1, c2 = st.columns(2)
-            with c1:
-                st.markdown("**Confusion matrix at the decision** (flag = refer or decline; loans per run)")
-                cmv = cm_[cm_.rule.str.startswith("Version 2")].iloc[0]
-                st.dataframe(pd.DataFrame({"Predicted: flag": [cmv.defaulters_flagged_TP, cmv.repayers_flagged_FP],
-                                           "Predicted: approve": [cmv.defaulters_approved_FN, cmv.repayers_approved_TN]},
-                                          index=["Actually defaulted", "Actually repaid"]).round(1), width="stretch")
-                st.dataframe(cm_[["rule", "recall_defaulters_caught", "specificity_repayers_approved", "precision", "f1",
-                                  "default_rate_among_approved"]].rename(columns={
-                    "rule": "Rule", "recall_defaulters_caught": "Defaulters caught (recall)",
-                    "specificity_repayers_approved": "Repayers approved", "precision": "Precision", "f1": "F1",
-                    "default_rate_among_approved": "Default rate approved"}), hide_index=True, width="stretch",
-                    column_config={c_: st.column_config.NumberColumn(format="percent") for c_ in
-                                   ["Defaulters caught (recall)", "Repayers approved", "Precision", "F1",
-                                    "Default rate approved"]})
-                st.caption("Accuracy is not used: with 10.8% defaults, approving everyone is 89% 'accurate' and useless. "
-                           "Banks judge recall of defaulters, repayers approved, and the default rate among approvals.")
-            with c2:
-                st.markdown("**What drives the model** (mean |SHAP| over all loans)")
-                st.altair_chart(alt.Chart(shg.head(10)).mark_bar(color="#16324A").encode(
+                st.markdown("#### What drives the model")
+                st.altair_chart(alt.Chart(shg.head(8)).mark_bar(color="#16324A").encode(
                     y=alt.Y("feature:N", sort="-x", title=None, axis=alt.Axis(labelLimit=240)),
-                    x=alt.X("mean_abs_shap:Q", title="Average impact on the log-odds of default"),
-                    tooltip=["feature", "group", alt.Tooltip("mean_abs_shap:Q", format=".3f")]).properties(height=300),
+                    x=alt.X("mean_abs_shap:Q", title="Average impact on the risk (mean |SHAP|)"),
+                    tooltip=["feature", "group", alt.Tooltip("mean_abs_shap:Q", format=".3f")]).properties(height=260),
                     width="stretch")
-                if sig_ is not None:
-                    st.markdown("**Is version 2 really better?** (bootstrap over loans, 95% interval)")
-                    sg = sig_.copy()
-                    sg["measure"] = sg["measure"].map({"approval_gain": "More applicants approved",
-                                                       "default_rate_change": "Change in default rate among approved",
-                                                       "referral_change": "Change in cases sent to an officer"})
-                    st.dataframe(sg[["measure", "estimate", "ci_low", "ci_high"]].rename(columns={
-                        "measure": "Version 2 vs version 1", "estimate": "Estimate", "ci_low": "95% low",
-                        "ci_high": "95% high"}), hide_index=True, width="stretch", column_config={
-                        c_: st.column_config.NumberColumn(format="%.3f") for c_ in ["Estimate", "95% low", "95% high"]})
-                    st.caption("More approvals and fewer referrals are statistically significant. The lower default rate "
-                               "points the right way in 94% of resamples, but 679 loans are too few to prove it at 95%.")
-
-        st.markdown("#### Rules + AI vs AI alone vs rules alone")
-        d3 = dec[dec.version.isin(["v1", "ai_only", "v2"])].pivot_table(index="version", columns="verdict",
-                                                                        values="share").reindex(["v1", "ai_only", "v2"])
-        dr = dec[(dec.version.isin(["v1", "ai_only", "v2"])) & (dec.verdict == "approve")].set_index("version")["default_rate"]
-        d3["Default rate among approved"] = dr
-        d3.index = ["Rules only (version 1)", "AI only (no rules)", "Rules + AI (version 2)"]
-        st.dataframe(d3[["approve", "refer", "decline", "Default rate among approved"]].rename(
-            columns={"approve": "Approved", "refer": "Referred", "decline": "Declined"}), width="stretch",
-            column_config={c_: st.column_config.NumberColumn(format="percent") for c_ in
-                           ["Approved", "Referred", "Declined", "Default rate among approved"]})
-        st.caption("On risk the AI alone does as well (its extra approvals are mostly people the legal age rule "
-                   "blocks), but on the forged and misleading sample statements the AI alone would approve 5 of 7 - "
-                   "an edited statement looks like a good borrower. Rules for legality, fraud and borrower "
-                   "protection + AI for risk is the strongest design.")
-        ltv = _csv("india_ntc_ltv.csv")
-        if ltv is not None:
-            st.markdown("#### Why collateral and own contribution matter (116,950 Indian new-to-credit loans, L&T)")
-            l_ = ltv[(ltv.population == "New to credit") & (ltv.loans >= 1000)]
-            st.altair_chart(alt.Chart(l_).mark_bar(color="#16324A").encode(
-                x=alt.X("ltv_band:N", title="Loan as a share of the vehicle's price", sort=None),
-                y=alt.Y("default_rate:Q", title="Defaulted", axis=alt.Axis(format="%")),
-                tooltip=["ltv_band", alt.Tooltip("default_rate:Q", format=".1%"), "loans"]).properties(height=220),
-                width="stretch")
-            st.caption("The more the borrower pays from their own pocket, the fewer defaults. FAIRScore uses collateral "
-                       "to lower the expected loss (not to replace the repayment check) and checks the own contribution "
-                       "on purchase loans.")
-        alfa = _csv("alfabattle_label_efficiency.csv")
-        if alfa is not None:
-            st.markdown("#### Modern transactions at scale: AlfaBattle 2.0 (132,242 clients, 3,108 defaults)")
-            a_ = alfa.copy()
-            a_["Labelled training clients"] = a_["train_fraction"].map(lambda f: f"{f:.0%}")
-            st.altair_chart(alt.Chart(a_).mark_line(point=True).encode(
-                x=alt.X("train_fraction:Q", title="Share of labelled training clients used", scale=alt.Scale(type="log"),
-                        axis=alt.Axis(format="%", values=[0.01, 0.05, 0.2, 1.0])),
-                y=alt.Y("auc:Q", title="AUC on 39,673 held-out clients", scale=alt.Scale(domain=[0.55, 0.76])),
-                color=alt.Color("method:N", title=None, legend=alt.Legend(orient="bottom", columns=2)),
-                tooltip=["method", "Labelled training clients", alt.Tooltip("auc:Q", format=".3f"), "train_defaults"]
-            ).properties(height=300), width="stretch")
-            st.caption("Card transactions before a loan, labelled with default. Self-supervised pre-training makes the "
-                       "neural network 4-5x more label-efficient (pre-trained with 5% of labels ~ scratch with 20%); "
-                       "gradient boosting on designed features stays strongest (AUC 0.748, 0.731-0.763), and adding the "
-                       "pre-trained embedding helps most when labelled loans are scarce. Research only: the data's "
-                       "categories are anonymised codes that cannot be matched to Indian statements.")
-        anom = _csv("statement_anomaly_metrics.csv")
-        if anom is not None:
-            st.markdown("#### Research module: detecting manipulated statements (unsupervised)")
-            a_ = anom[anom.statements == "all"][["manipulation", "auc", "detected_at_5pct_false_alarms"]]
-            st.dataframe(a_.rename(columns={"manipulation": "Manipulation injected", "auc": "AUC",
-                                            "detected_at_5pct_false_alarms": "Caught at 5% false alarms"}),
-                         hide_index=True, width="stretch", column_config={
-                             "AUC": st.column_config.NumberColumn(format="%.3f"),
-                             "Caught at 5% false alarms": st.column_config.NumberColumn(format="percent")})
-            st.caption("Isolation Forest trained only on genuine statements (1,388 real Berka windows + 440 "
-                       "Indian-style), tested on held-out statements with injected manipulations whose balances still "
-                       "add up. Not used in live decisions yet: real Indian statements differ from both training "
-                       "sources and would raise false alarms.")
-
-        # ------------------------------------------------------------------ FAIRScore 3.0
-        st.markdown("---")
-        st.markdown("### FAIRScore 3.0 · built to keep working in a new market")
-        st.caption("The engine learned from Czech loans; a lender would use it on Indian applicants. These studies "
-                   "recreate that situation inside Berka, where every outcome is known, and test the parts that keep "
-                   "the AI safe and keep it learning: the starter-loan ladder, the learning loop, shift-aware "
-                   "uncertainty, exploration against selection bias, and a proxy-fairness audit.")
-        sl = _csv("starter_ladder_evidence.csv")
-        if sl is not None:
-            st.markdown("#### Starter-loan ladder: a small yes instead of a dead-end referral")
-            g_ = sl.set_index("group")
-            v3 = g_.loc["offered credit today: approval or starter (version 3)"]
-            v2_ = g_.loc["offered credit today: approval only (version 2)"]
-            s_ = g_.loc["  ... of which starter loan (PD <= max_pd)"]
-            full = g_.loc["  ... the same starter cases if lent the FULL amount"]
-            st.markdown(
-                f'<div class="kpi"><div><b>{v3.share_of_applicants:.0%}</b><span>offered credit today (version 2: '
-                f'{v2_.share_of_applicants:.0%})</span></div>'
-                f'<div><b>{s_.share_of_applicants:.0%}</b><span>of applicants move from "refer" to a starter loan; '
-                f'{s_.default_rate:.1%} of them defaulted</span></div>'
-                f'<div><b>−{1 - s_.loss_per_applicant / full.loss_per_applicant:.0%}</b><span>loss on those cases vs '
-                f'lending them the full amount</span></div>'
-                f'<div><b>{v3.default_rate:.1%}</b><span>default rate across everyone offered credit '
-                f'(version 2: {v2_.default_rate:.1%})</span></div></div>', unsafe_allow_html=True)
-            st.caption("Nested out-of-fold decisions on the 679 loans. Conservative: a starter loan is assumed to default "
-                       "whenever the full loan did. The starter is at most one month of verified income (median "
-                       f"{sl.starter_size_vs_requested.iloc[0]:.0%} of the request), so the bank's loss stays small while "
-                       "the applicant builds a repayment record with the credit bureaus.")
-        d0, sc, scal, sdec = (_csv("shift_day0.csv"), _csv("shift_conformal.csv"), _csv("shift_calibration.csv"),
-                              _csv("shift_decisions.csv"))
-        if sc is not None and scal is not None:
-            c1, c2 = st.columns(2)
-            with c1:
-                st.markdown("#### Uncertainty that stays honest when the population changes")
-                t_ = sc[sc.variant != "weighted Mondrian, always"].copy()
-                t_["Scenario"] = t_.scenario.str.replace(r"^\d+ ", "", regex=True)
-                t_["Method"] = t_.variant.map({"standard (source calibration)": "Standard conformal (2.0)",
-                                               "FAIRScore 3.0 (weighted if shift detected)": "Shift-aware (3.0)"})
-                ch = alt.Chart(t_).mark_bar().encode(
-                    y=alt.Y("Scenario:N", sort=None, title=None, axis=alt.Axis(labelLimit=240)),
-                    yOffset="Method:N",
-                    x=alt.X("defaulters_not_flagged:Q", title="Would-be defaulters the AI could auto-approve",
-                            axis=alt.Axis(format="%")),
-                    color=alt.Color("Method:N", title=None, scale=alt.Scale(range=["#B8863B", "#16324A"]),
-                                    legend=alt.Legend(orient="bottom")),
-                    tooltip=["Scenario", "Method", alt.Tooltip("defaulters_not_flagged:Q", format=".1%"),
-                             alt.Tooltip("auto_approvable_share:Q", format=".0%", title="auto-approvable share")])
-                rule = alt.Chart(pd.DataFrame({"x": [0.10]})).mark_rule(color="#9E3A2E", strokeDash=[4, 3]).encode(x="x:Q")
-                lab = alt.Chart(t_).mark_text(align="left", dx=3, fontSize=10, color="#555").encode(
-                    y=alt.Y("Scenario:N", sort=None), yOffset="Method:N", x="defaulters_not_flagged:Q",
-                    text=alt.Text("defaulters_not_flagged:Q", format=".1%"))
-                st.altair_chart((ch + lab + rule).properties(height=360), width="stretch")
-                st.caption("The guarantee is at most 10% (red line). When applicants look safer than the training ones but "
-                           "some still default, standard conformal breaks it (up to 17%); weighting the training cases by "
-                           "how much they resemble the new applicants restores it. Weighting is switched on only when a "
-                           "shift is detected: always weighting breaks it under a pure default-rate change. 30 repeats.")
             with c2:
-                st.markdown("#### How many local repayments are needed?")
-                opts = list(scal.scenario.unique())
-                pick = st.selectbox("Scenario", opts, index=opts.index(next(o for o in opts if o.startswith("2"))),
-                                    key="shift_pick")
-                c_ = scal[(scal.scenario == pick) & scal.method.isin(
-                    ["Platt on local outcomes", "Bayesian recalibration (FAIRScore 3.0)", "retrain on local loans only",
-                     "retrain on source + local (local x3)"])]
-                base = scal[(scal.scenario == pick) & (scal.method == "none (source engine)")]["brier"].iloc[0]
-                ln = alt.Chart(c_).mark_line(point=True).encode(
-                    x=alt.X("n_labels:Q", title="Repayment outcomes recorded by the lender", scale=alt.Scale(type="log")),
-                    y=alt.Y("brier:Q", title="Brier score (lower = better)", scale=alt.Scale(zero=False)),
+                st.markdown("#### Confusion matrix at the decision")
+                cmv = cm_[cm_.rule.str.startswith("Version 2")].iloc[0]
+                st.dataframe(pd.DataFrame({"Flagged (refer / decline)": [cmv.defaulters_flagged_TP, cmv.repayers_flagged_FP],
+                                           "Approved": [cmv.defaulters_approved_FN, cmv.repayers_approved_TN]},
+                                          index=["Actually defaulted", "Actually repaid"]).round(1), width="stretch")
+                st.caption(f"Loans per run. {cmv.recall_defaulters_caught:.0%} of defaulters are caught; "
+                           f"{cmv.default_rate_among_approved:.1%} of approved loans default. Accuracy is not used: "
+                           "with 10.8% defaults, approving everyone would be 89% 'accurate' and useless.")
+
+        # ------------------------------------------------------------------ advanced studies, folded away
+        st.markdown("")
+        with st.expander("More research studies (for detailed questions)"):
+            if seqm is not None:
+                st.markdown("#### Deep learning on raw transactions")
+                st.dataframe(seqm.rename(columns={"model": "Model", "auc": "AUC", "auc_sd": "± sd", "folds": "Folds"}),
+                             hide_index=True, width="stretch",
+                             column_config={"AUC": st.column_config.NumberColumn(format="%.3f"),
+                                            "± sd": st.column_config.NumberColumn(format="%.3f")})
+                st.caption("A GRU encoder pre-trained without labels on all 4,500 Berka accounts' transactions.")
+            if sig_ is not None:
+                st.markdown("#### Is rules + AI really better than rules alone? (bootstrap, 95% interval)")
+                sg = sig_.copy()
+                sg["measure"] = sg["measure"].map({"approval_gain": "More applicants approved",
+                                                   "default_rate_change": "Change in default rate among approved",
+                                                   "referral_change": "Change in cases sent to an officer"})
+                st.dataframe(sg[["measure", "estimate", "ci_low", "ci_high"]].rename(columns={
+                    "measure": "Version 2 vs version 1", "estimate": "Estimate", "ci_low": "95% low",
+                    "ci_high": "95% high"}), hide_index=True, width="stretch", column_config={
+                    c_: st.column_config.NumberColumn(format="%.3f") for c_ in ["Estimate", "95% low", "95% high"]})
+                st.caption("More approvals and fewer referrals are statistically significant. The lower default rate "
+                           "points the right way in 94% of resamples, but 679 loans are too few to prove it at 95%.")
+            if ftrade is not None:
+                st.markdown("#### Fairness-constrained training (equalized odds) vs the deployed model")
+                ft = ftrade.rename(columns={"attribute": "Attribute", "variant": "Model", "auc": "AUC",
+                                            "eo_gap": "Equalized-odds gap", "approval_gap_repayers": "Repayer approval gap",
+                                            "dp_ratio": "Approval-rate ratio", "default_rate_approved": "Default rate approved"})
+                st.dataframe(ft, hide_index=True, width="stretch", column_config={
+                    c_: st.column_config.NumberColumn(format="%.3f") for c_ in
+                    ["AUC", "Equalized-odds gap", "Repayer approval gap", "Approval-rate ratio", "Default rate approved"]})
+                st.caption("Forcing equal error rates cost most of the accuracy and tripled defaults among approved loans, "
+                           "while the unconstrained model already treats groups similarly.")
+            ltv = _csv("india_ntc_ltv.csv")
+            if ltv is not None:
+                st.markdown("#### Why collateral and own contribution matter (116,950 Indian new-to-credit loans, L&T)")
+                l_ = ltv[(ltv.population == "New to credit") & (ltv.loans >= 1000)]
+                st.altair_chart(alt.Chart(l_).mark_bar(color="#16324A").encode(
+                    x=alt.X("ltv_band:N", title="Loan as a share of the vehicle's price", sort=None),
+                    y=alt.Y("default_rate:Q", title="Defaulted", axis=alt.Axis(format="%")),
+                    tooltip=["ltv_band", alt.Tooltip("default_rate:Q", format=".1%"), "loans"]).properties(height=220),
+                    width="stretch")
+                st.caption("The more the borrower pays from their own pocket, the fewer defaults. FAIRScore uses collateral "
+                           "to lower the expected loss (not to replace the repayment check) and checks the own contribution "
+                           "on purchase loans.")
+            alfa = _csv("alfabattle_label_efficiency.csv")
+            if alfa is not None:
+                st.markdown("#### Modern transactions at scale: AlfaBattle 2.0 (132,242 clients, 3,108 defaults)")
+                a_ = alfa.copy()
+                a_["Labelled training clients"] = a_["train_fraction"].map(lambda f: f"{f:.0%}")
+                st.altair_chart(alt.Chart(a_).mark_line(point=True).encode(
+                    x=alt.X("train_fraction:Q", title="Share of labelled training clients used", scale=alt.Scale(type="log"),
+                            axis=alt.Axis(format="%", values=[0.01, 0.05, 0.2, 1.0])),
+                    y=alt.Y("auc:Q", title="AUC on 39,673 held-out clients", scale=alt.Scale(domain=[0.55, 0.76])),
                     color=alt.Color("method:N", title=None, legend=alt.Legend(orient="bottom", columns=2)),
-                    tooltip=["method", "n_labels", alt.Tooltip("brier:Q", format=".4f"), alt.Tooltip("ece:Q", format=".3f")])
-                rl = alt.Chart(pd.DataFrame({"y": [base]})).mark_rule(strokeDash=[4, 3], color="#5B6270").encode(y="y:Q")
-                st.altair_chart((ln + rl).properties(height=290), width="stretch")
-                st.caption("Dashed: the engine as trained. Bayesian recalibration (prior: 'no change') is never worse than "
-                           "doing nothing and beats plain Platt scaling at every sample size; retraining needs a few hundred "
-                           "outcomes, so FAIRScore proposes it only as a challenger once enough defaults are recorded.")
-            if d0 is not None:
-                st.markdown("#### Day 0: what can be known before any loan is repaid")
-                t_ = d0[["scenario", "true_default_rate", "estimate_mean_pd", "estimate_em_prior_shift", "shift_detected",
-                         "max_psi"]].copy()
-                st.dataframe(t_.rename(columns={"scenario": "Scenario", "true_default_rate": "True default rate",
-                                                "estimate_mean_pd": "Estimate: mean PD",
-                                                "estimate_em_prior_shift": "Estimate: EM (prior shift)",
-                                                "shift_detected": "Shift detected", "max_psi": "Largest PSI"}),
+                    tooltip=["method", "Labelled training clients", alt.Tooltip("auc:Q", format=".3f"), "train_defaults"]
+                ).properties(height=300), width="stretch")
+                st.caption("Card transactions before a loan, labelled with default. Self-supervised pre-training makes the "
+                           "neural network 4-5x more label-efficient (pre-trained with 5% of labels ~ scratch with 20%); "
+                           "gradient boosting on designed features stays strongest (AUC 0.748, 0.731-0.763), and adding the "
+                           "pre-trained embedding helps most when labelled loans are scarce. Research only: the data's "
+                           "categories are anonymised codes that cannot be matched to Indian statements.")
+            anom = _csv("statement_anomaly_metrics.csv")
+            if anom is not None:
+                st.markdown("#### Research module: detecting manipulated statements (unsupervised)")
+                a_ = anom[anom.statements == "all"][["manipulation", "auc", "detected_at_5pct_false_alarms"]]
+                st.dataframe(a_.rename(columns={"manipulation": "Manipulation injected", "auc": "AUC",
+                                                "detected_at_5pct_false_alarms": "Caught at 5% false alarms"}),
                              hide_index=True, width="stretch", column_config={
-                                 c_: st.column_config.NumberColumn(format="percent") for c_ in
-                                 ("True default rate", "Estimate: mean PD", "Estimate: EM (prior shift)", "Shift detected")})
-                st.caption("From 400 unlabelled applications. The mean PD is right when only the applicants change; the EM "
-                           "estimate is right when only the default rate changes and badly wrong otherwise. Neither can be "
-                           "trusted alone, so FAIRScore shows both and treats a gap as an alarm, not as a correction.")
-        ex = _csv("exploration_study.csv")
-        if ex is not None:
-            st.markdown("#### Learning about the people a bank used to turn away")
-            acc = st.radio("The old policy accepted", [0.4, 0.6], format_func=lambda v: f"{v:.0%} of applicants",
-                           horizontal=True, key="explore_accept")
-            e_ = ex[(ex.accept_share == acc) & ~ex.strategy.str.startswith("cost")].copy()
-            st.dataframe(e_[["strategy", "auc_all", "auc_rejected", "brier_all", "calibration_gap_rejected"]].rename(columns={
-                "strategy": "How the new model was trained", "auc_all": "AUC, all applicants",
-                "auc_rejected": "AUC among those the old policy rejected", "brier_all": "Brier",
-                "calibration_gap_rejected": "PD minus actual default rate (rejected)"}),
-                hide_index=True, width="stretch", column_config={
-                    "AUC, all applicants": st.column_config.NumberColumn(format="%.3f"),
-                    "AUC among those the old policy rejected": st.column_config.NumberColumn(format="%.3f"),
-                    "Brier": st.column_config.NumberColumn(format="%.4f"),
-                    "PD minus actual default rate (rejected)": st.column_config.NumberColumn(format="%+.3f")})
-            cost = ex[(ex.accept_share == acc) & ex.strategy.str.startswith("cost")]
-            st.caption(f"The old policy (the expert scorecard) accepted {acc:.0%} of applicants; outcomes are known only for "
-                       "them, plus a random share of the rejected who received a starter loan. Weighting those by 1 / "
-                       "probability of being explored (inverse-propensity weighting) gives the model back a view of "
-                       "everyone. Fuzzy augmentation (the classic fix) recovers under 10% of the lost accuracy; a 10% "
-                       "exploration budget about half; 20% up to 80%. Full 1 / e weights leave PDs about 2 points too high "
-                       "for the rejected group; the learning loop's recalibration corrects the level. Cost: " + "; ".join(f"{r_.strategy.replace('cost of exploration ', '')} exploration "
-                                                     f"lends to {r_.explored_share_of_applicants:.1%} of applicants, "
-                                                     f"{r_.explored_default_rate:.0%} of whom default"
-                                                     for r_ in cost.itertuples()) + ".")
-        pl, pf = _csv("proxy_leakage.csv"), _csv("proxy_fairness.csv")
-        if pl is not None and pf is not None:
-            c1, c2 = st.columns(2)
-            with c1:
-                st.markdown("#### Proxy test: do the AI's inputs reveal who or where someone is?")
-                pl = pl.copy()
-                if "boosted_auc" in pl:
-                    pl["p_holm"] = pl[["linear_p_holm", "boosted_p_holm"]].min(axis=1)
-                cols = [c for c in ("attribute", "linear_auc", "boosted_auc", "boosted_null_auc", "p_holm", "reading")
-                        if c in pl] if "boosted_auc" in pl else ["attribute", "leakage_auc", "reading"]
-                num = {"linear_auc": "Linear probe AUC", "boosted_auc": "Boosted probe AUC", "boosted_null_auc": "Chance",
-                       "p_holm": "p (Holm-corrected)", "leakage_auc": "AUC"}
-                st.dataframe(pl[cols].rename(columns={"attribute": "Attribute", "reading": "Reading", **num}),
+                                 "AUC": st.column_config.NumberColumn(format="%.3f"),
+                                 "Caught at 5% false alarms": st.column_config.NumberColumn(format="percent")})
+                st.caption("Isolation Forest trained only on genuine statements (1,388 real Berka windows + 440 "
+                           "Indian-style), tested on held-out statements with injected manipulations whose balances still "
+                           "add up. Not used in live decisions yet: real Indian statements differ from both training "
+                           "sources and would raise false alarms.")
+
+            sl = _csv("starter_ladder_evidence.csv")
+            if sl is not None:
+                st.markdown("#### Starter-loan ladder: a small yes instead of a dead-end referral")
+                g_ = sl.set_index("group")
+                v3 = g_.loc["offered credit today: approval or starter (version 3)"]
+                v2_ = g_.loc["offered credit today: approval only (version 2)"]
+                s_ = g_.loc["  ... of which starter loan (PD <= max_pd)"]
+                full = g_.loc["  ... the same starter cases if lent the FULL amount"]
+                st.markdown(
+                    f'<div class="kpi"><div><b>{v3.share_of_applicants:.0%}</b><span>offered credit today (version 2: '
+                    f'{v2_.share_of_applicants:.0%})</span></div>'
+                    f'<div><b>{s_.share_of_applicants:.0%}</b><span>of applicants move from "refer" to a starter loan; '
+                    f'{s_.default_rate:.1%} of them defaulted</span></div>'
+                    f'<div><b>−{1 - s_.loss_per_applicant / full.loss_per_applicant:.0%}</b><span>loss on those cases vs '
+                    f'lending them the full amount</span></div>'
+                    f'<div><b>{v3.default_rate:.1%}</b><span>default rate across everyone offered credit '
+                    f'(version 2: {v2_.default_rate:.1%})</span></div></div>', unsafe_allow_html=True)
+                st.caption("Nested out-of-fold decisions on the 679 loans. Conservative: a starter loan is assumed to default "
+                           "whenever the full loan did. The starter is at most one month of verified income (median "
+                           f"{sl.starter_size_vs_requested.iloc[0]:.0%} of the request), so the bank's loss stays small while "
+                           "the applicant builds a repayment record with the credit bureaus.")
+            d0, sc, scal, sdec = (_csv("shift_day0.csv"), _csv("shift_conformal.csv"), _csv("shift_calibration.csv"),
+                                  _csv("shift_decisions.csv"))
+            if sc is not None and scal is not None:
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.markdown("#### Uncertainty that stays honest when the population changes")
+                    t_ = sc[sc.variant != "weighted Mondrian, always"].copy()
+                    t_["Scenario"] = t_.scenario.str.replace(r"^\d+ ", "", regex=True)
+                    t_["Method"] = t_.variant.map({"standard (source calibration)": "Standard conformal (2.0)",
+                                                   "FAIRScore 3.0 (weighted if shift detected)": "Shift-aware (3.0)"})
+                    ch = alt.Chart(t_).mark_bar().encode(
+                        y=alt.Y("Scenario:N", sort=None, title=None, axis=alt.Axis(labelLimit=240)),
+                        yOffset="Method:N",
+                        x=alt.X("defaulters_not_flagged:Q", title="Would-be defaulters the AI could auto-approve",
+                                axis=alt.Axis(format="%")),
+                        color=alt.Color("Method:N", title=None, scale=alt.Scale(range=["#B8863B", "#16324A"]),
+                                        legend=alt.Legend(orient="bottom")),
+                        tooltip=["Scenario", "Method", alt.Tooltip("defaulters_not_flagged:Q", format=".1%"),
+                                 alt.Tooltip("auto_approvable_share:Q", format=".0%", title="auto-approvable share")])
+                    rule = alt.Chart(pd.DataFrame({"x": [0.10]})).mark_rule(color="#9E3A2E", strokeDash=[4, 3]).encode(x="x:Q")
+                    lab = alt.Chart(t_).mark_text(align="left", dx=3, fontSize=10, color="#555").encode(
+                        y=alt.Y("Scenario:N", sort=None), yOffset="Method:N", x="defaulters_not_flagged:Q",
+                        text=alt.Text("defaulters_not_flagged:Q", format=".1%"))
+                    st.altair_chart((ch + lab + rule).properties(height=360), width="stretch")
+                    st.caption("The guarantee is at most 10% (red line). When applicants look safer than the training ones but "
+                               "some still default, standard conformal breaks it (up to 17%); weighting the training cases by "
+                               "how much they resemble the new applicants restores it. Weighting is switched on only when a "
+                               "shift is detected: always weighting breaks it under a pure default-rate change. 30 repeats.")
+                with c2:
+                    st.markdown("#### How many local repayments are needed?")
+                    opts = list(scal.scenario.unique())
+                    pick = st.selectbox("Scenario", opts, index=opts.index(next(o for o in opts if o.startswith("2"))),
+                                        key="shift_pick")
+                    c_ = scal[(scal.scenario == pick) & scal.method.isin(
+                        ["Platt on local outcomes", "Bayesian recalibration (FAIRScore 3.0)", "retrain on local loans only",
+                         "retrain on source + local (local x3)"])]
+                    base = scal[(scal.scenario == pick) & (scal.method == "none (source engine)")]["brier"].iloc[0]
+                    ln = alt.Chart(c_).mark_line(point=True).encode(
+                        x=alt.X("n_labels:Q", title="Repayment outcomes recorded by the lender", scale=alt.Scale(type="log")),
+                        y=alt.Y("brier:Q", title="Brier score (lower = better)", scale=alt.Scale(zero=False)),
+                        color=alt.Color("method:N", title=None, legend=alt.Legend(orient="bottom", columns=2)),
+                        tooltip=["method", "n_labels", alt.Tooltip("brier:Q", format=".4f"), alt.Tooltip("ece:Q", format=".3f")])
+                    rl = alt.Chart(pd.DataFrame({"y": [base]})).mark_rule(strokeDash=[4, 3], color="#5B6270").encode(y="y:Q")
+                    st.altair_chart((ln + rl).properties(height=290), width="stretch")
+                    st.caption("Dashed: the engine as trained. Bayesian recalibration (prior: 'no change') is never worse than "
+                               "doing nothing and beats plain Platt scaling at every sample size; retraining needs a few hundred "
+                               "outcomes, so FAIRScore proposes it only as a challenger once enough defaults are recorded.")
+                if d0 is not None:
+                    st.markdown("#### Day 0: what can be known before any loan is repaid")
+                    t_ = d0[["scenario", "true_default_rate", "estimate_mean_pd", "estimate_em_prior_shift", "shift_detected",
+                             "max_psi"]].copy()
+                    st.dataframe(t_.rename(columns={"scenario": "Scenario", "true_default_rate": "True default rate",
+                                                    "estimate_mean_pd": "Estimate: mean PD",
+                                                    "estimate_em_prior_shift": "Estimate: EM (prior shift)",
+                                                    "shift_detected": "Shift detected", "max_psi": "Largest PSI"}),
+                                 hide_index=True, width="stretch", column_config={
+                                     c_: st.column_config.NumberColumn(format="percent") for c_ in
+                                     ("True default rate", "Estimate: mean PD", "Estimate: EM (prior shift)", "Shift detected")})
+                    st.caption("From 400 unlabelled applications. The mean PD is right when only the applicants change; the EM "
+                               "estimate is right when only the default rate changes and badly wrong otherwise. Neither can be "
+                               "trusted alone, so FAIRScore shows both and treats a gap as an alarm, not as a correction.")
+            ex = _csv("exploration_study.csv")
+            if ex is not None:
+                st.markdown("#### Learning about the people a bank used to turn away")
+                acc = st.radio("The old policy accepted", [0.4, 0.6], format_func=lambda v: f"{v:.0%} of applicants",
+                               horizontal=True, key="explore_accept")
+                e_ = ex[(ex.accept_share == acc) & ~ex.strategy.str.startswith("cost")].copy()
+                st.dataframe(e_[["strategy", "auc_all", "auc_rejected", "brier_all", "calibration_gap_rejected"]].rename(columns={
+                    "strategy": "How the new model was trained", "auc_all": "AUC, all applicants",
+                    "auc_rejected": "AUC among those the old policy rejected", "brier_all": "Brier",
+                    "calibration_gap_rejected": "PD minus actual default rate (rejected)"}),
                     hide_index=True, width="stretch", column_config={
-                        v: st.column_config.NumberColumn(format="%.2f" if k == "p_holm" else "%.3f") for k, v in num.items()})
-                st.caption("A linear and a boosted probe each try to recover the attribute from the 24 inputs, compared with "
-                           "100 label-shuffled runs and corrected for testing 8 times. In India the worry is the pin code "
-                           "standing in for community or caste; Berka's district and district income are the closest "
-                           "testable analogue.")
-            with c2:
-                st.markdown("#### Repayers approved, by district income")
-                f_ = pf[pf.attribute == "district_income"].copy()
-                f_["Version"] = f_.version.map({"v1": "1 · rules", "v2": "2 · AI"})
-                st.altair_chart(alt.Chart(f_).mark_bar().encode(
-                    x=alt.X("group:N", title=None, sort=["poorer districts", "middle districts", "richer districts"],
-                            axis=alt.Axis(labelAngle=0)),
-                    xOffset="Version:N",
-                    y=alt.Y("approved_among_repayers:Q", title="Repayers approved", axis=alt.Axis(format="%")),
-                    color=alt.Color("Version:N", title=None, scale=alt.Scale(range=["#B8863B", "#16324A"]),
-                                    legend=alt.Legend(orient="bottom")),
-                    tooltip=["group", "Version", alt.Tooltip("approved_among_repayers:Q", format=".1%"),
-                             alt.Tooltip("ci_low:Q", format=".1%"), alt.Tooltip("ci_high:Q", format=".1%")]
-                ).properties(height=250), width="stretch")
-                reg = pf[(pf.attribute == "region") & (pf.version == "v2")]
-                low = reg[~reg.four_fifths_ok]
-                inc_ok = bool(f_[f_.version == "v2"].four_fifths_ok.all())
-                st.caption("Equal opportunity: borrowers who repaid should be approved at similar rates wherever they live. "
-                           + ("Every district-income group passes the four-fifths rule. " if inc_ok else
-                              "A district-income group falls below the four-fifths rule. ")
-                           + ("By region (8 regions, 56-127 loans each): " + ", ".join(
-                               f"{r_.group} at {r_.ratio_to_best:.2f} of the best-treated region "
-                               f"(interval {r_.ci_low:.0%}-{r_.ci_high:.0%})" for r_ in low.itertuples())
-                              + " is below 0.80, with overlapping intervals; a pilot keeps monitoring it."
-                              if len(low) else "Every region passes it too."))
+                        "AUC, all applicants": st.column_config.NumberColumn(format="%.3f"),
+                        "AUC among those the old policy rejected": st.column_config.NumberColumn(format="%.3f"),
+                        "Brier": st.column_config.NumberColumn(format="%.4f"),
+                        "PD minus actual default rate (rejected)": st.column_config.NumberColumn(format="%+.3f")})
+                cost = ex[(ex.accept_share == acc) & ex.strategy.str.startswith("cost")]
+                st.caption(f"The old policy (the expert scorecard) accepted {acc:.0%} of applicants; outcomes are known only for "
+                           "them, plus a random share of the rejected who received a starter loan. Weighting those by 1 / "
+                           "probability of being explored (inverse-propensity weighting) gives the model back a view of "
+                           "everyone. Fuzzy augmentation (the classic fix) recovers under 10% of the lost accuracy; a 10% "
+                           "exploration budget about half; 20% up to 80%. Full 1 / e weights leave PDs about 2 points too high "
+                           "for the rejected group; the learning loop's recalibration corrects the level. Cost: " + "; ".join(f"{r_.strategy.replace('cost of exploration ', '')} exploration "
+                                                         f"lends to {r_.explored_share_of_applicants:.1%} of applicants, "
+                                                         f"{r_.explored_default_rate:.0%} of whom default"
+                                                         for r_ in cost.itertuples()) + ".")
+            pl, pf = _csv("proxy_leakage.csv"), _csv("proxy_fairness.csv")
+            if pl is not None and pf is not None:
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.markdown("#### Proxy test: do the AI's inputs reveal who or where someone is?")
+                    pl = pl.copy()
+                    if "boosted_auc" in pl:
+                        pl["p_holm"] = pl[["linear_p_holm", "boosted_p_holm"]].min(axis=1)
+                    cols = [c for c in ("attribute", "linear_auc", "boosted_auc", "boosted_null_auc", "p_holm", "reading")
+                            if c in pl] if "boosted_auc" in pl else ["attribute", "leakage_auc", "reading"]
+                    num = {"linear_auc": "Linear probe AUC", "boosted_auc": "Boosted probe AUC", "boosted_null_auc": "Chance",
+                           "p_holm": "p (Holm-corrected)", "leakage_auc": "AUC"}
+                    st.dataframe(pl[cols].rename(columns={"attribute": "Attribute", "reading": "Reading", **num}),
+                        hide_index=True, width="stretch", column_config={
+                            v: st.column_config.NumberColumn(format="%.2f" if k == "p_holm" else "%.3f") for k, v in num.items()})
+                    st.caption("A linear and a boosted probe each try to recover the attribute from the 24 inputs, compared with "
+                               "100 label-shuffled runs and corrected for testing 8 times. In India the worry is the pin code "
+                               "standing in for community or caste; Berka's district and district income are the closest "
+                               "testable analogue.")
+                with c2:
+                    st.markdown("#### Repayers approved, by district income")
+                    f_ = pf[pf.attribute == "district_income"].copy()
+                    f_["Version"] = f_.version.map({"v1": "1 · rules", "v2": "2 · AI"})
+                    st.altair_chart(alt.Chart(f_).mark_bar().encode(
+                        x=alt.X("group:N", title=None, sort=["poorer districts", "middle districts", "richer districts"],
+                                axis=alt.Axis(labelAngle=0)),
+                        xOffset="Version:N",
+                        y=alt.Y("approved_among_repayers:Q", title="Repayers approved", axis=alt.Axis(format="%")),
+                        color=alt.Color("Version:N", title=None, scale=alt.Scale(range=["#B8863B", "#16324A"]),
+                                        legend=alt.Legend(orient="bottom")),
+                        tooltip=["group", "Version", alt.Tooltip("approved_among_repayers:Q", format=".1%"),
+                                 alt.Tooltip("ci_low:Q", format=".1%"), alt.Tooltip("ci_high:Q", format=".1%")]
+                    ).properties(height=250), width="stretch")
+                    reg = pf[(pf.attribute == "region") & (pf.version == "v2")]
+                    low = reg[~reg.four_fifths_ok]
+                    inc_ok = bool(f_[f_.version == "v2"].four_fifths_ok.all())
+                    st.caption("Equal opportunity: borrowers who repaid should be approved at similar rates wherever they live. "
+                               + ("Every district-income group passes the four-fifths rule. " if inc_ok else
+                                  "A district-income group falls below the four-fifths rule. ")
+                               + ("By region (8 regions, 56-127 loans each): " + ", ".join(
+                                   f"{r_.group} at {r_.ratio_to_best:.2f} of the best-treated region "
+                                   f"(interval {r_.ci_low:.0%}-{r_.ci_high:.0%})" for r_ in low.itertuples())
+                                  + " is below 0.80, with overlapping intervals; a pilot keeps monitoring it."
+                                  if len(low) else "Every region passes it too."))
 
 with tab_how:
     st.markdown("""
