@@ -1,0 +1,210 @@
+# FAIRScore AI -- lending policy.
+#
+# These are LENDER SETTINGS, not learned values. A credit-risk team changes them
+# here (no code change), raises `version`, and every assessment records the
+# policy version it was made under, so past decisions stay reproducible.
+# Defaults follow common Indian retail-lending practice.
+
+version = "2026.10-11"
+
+[loan]
+annual_interest_rate = 0.14      # assumed rate for the new loan's EMI (indicative)
+min_amount = 10000
+max_amount = 5000000
+min_term_months = 6
+max_term_months = 84
+
+[affordability]
+foir_pass = 0.45                 # all EMIs (existing + new) as a share of verified income
+foir_fail = 0.55
+surplus_min_share = 0.10         # at least 10% of income left after spending and the new EMI
+
+[evidence]
+min_months_pass = 6              # months of statement history
+min_months_caution = 3
+min_reconciled = 0.98            # share of rows whose running balance must add up
+max_breaks_share = 0.15          # above this the layout was not read reliably
+max_statement_age_days = 45      # the statement must end within 45 days of the application (latest months)
+
+[income]
+support_min = 0.80               # verified income must be >= 80% of declared income
+volatility_pass = 0.25           # coefficient of variation of monthly income
+volatility_fail = 0.50
+self_employed_min_payers = 3
+
+[conduct]
+overdraft_pass = 0.02            # share of transactions with balance below zero
+overdraft_fail = 0.10
+max_penalty_charges = 2          # 3 or more of the applicant's own payments returned unpaid fail; 1-2 refer
+betting_pass = 0.02              # gambling / betting as a share of all spending
+betting_fail = 0.10
+lenders_caution = 3              # different lenders / loan apps seen in the statement (loan stacking)
+lenders_fail = 5
+pass_through_caution = 0.30      # money received from people it is sent back to, as a share of money received -> refer
+salary_drop_caution = 0.75       # latest month's salary below 75% of the usual -> refer
+
+[own_contribution]
+# Loan-to-value for purchase loans (vehicle, appliance, furniture): applies when the price of the item
+# is entered. On 116,950 real Indian new-to-credit vehicle loans (L&T, results/india_ntc_ltv.csv) the
+# first-EMI default rate rose steadily with the share of the price financed: 14% at 60% or less,
+# 28-30% above 80%. Above the caution limit the case is referred; a loan above the price is declined
+# (the extra money is not for the item).
+ltv_caution = 0.85
+ltv_fail = 1.00
+
+[affordability_limits]
+# The eligible amount is the LOWEST of these limits (plus the FOIR and money-left rules above).
+max_income_multiple = 20         # loan at most 20 x verified monthly income
+min_take_home = 10000            # after all EMIs at least Rs 10,000 a month must remain ...
+take_home_per_dependent = 3000   # ... plus Rs 3,000 for each dependent
+abb_cover_min = 1.5              # average bank balance at least 1.5 x all EMIs ...
+abb_cover_applies_to = ["Self-employed / business owner", "Freelancer / gig worker"]   # ... for business owners and freelancers
+
+[eligibility]
+# Age is used ONLY here: the applicant must be an adult and the loan must end
+# before the usual retirement / maximum age for the employment type. It is never
+# a model input, and outcomes are monitored by age group.
+min_age = 21
+max_age_at_maturity = { "Salaried (private sector)" = 60, "Government employee" = 60, "Self-employed / business owner" = 65, "Freelancer / gig worker" = 65, "Farmer / agriculture" = 70, "Pensioner" = 75, "Student" = 60, "Unemployed" = 60 }
+# Minimum years in current work (salaried) / business vintage (self-employed): below it -> refer.
+min_work_years = { "Salaried (private sector)" = 0.5, "Government employee" = 0.5, "Self-employed / business owner" = 2.0, "Freelancer / gig worker" = 1.0, "Farmer / agriculture" = 2.0 }
+# Students and people with no job are judged on the income their statement PROVES, not on the label:
+# below this verified monthly income a student is referred for a co-applicant and an unemployed applicant
+# is declined; at or above it they are assessed like anyone else on that income.
+own_income_min = 15000
+not_eligible = ["Unemployed"]            # ... with no verified income: decline
+needs_co_applicant = ["Student"]         # ... with no verified income: refer for a co-applicant / guarantor
+# Students with a proven income of their own are assessed on it, but an unsecured loan to someone still
+# studying is kept smaller and shorter (lender's setting): above these -> refer, with a counter-offer.
+student_max_term_months = 36
+student_income_multiple = 8            # loan at most 8x verified monthly income
+student_max_amount = 500000            # above this a co-applicant / guarantor is needed
+# A declared student whose statement shows a full-time-size salary (a regular credit in most months at or
+# above this) -> refer: confirm whether the applicant studies or works (then assess as salaried).
+student_salary_query = 50000
+# Farm income arrives with the harvest: monthly variation up to this is normal (above it: refer for land records)
+farm_volatility_caution = 1.0
+
+[ai]
+# FAIRScore 2.0: the AI engine decides within these limits; the rules above stay as hard stops.
+mode = "ai_first"                 # "ai_first" | "policy_first" (version 1 behaviour)
+alpha = 0.10                      # conformal significance: at most 10% of would-be defaulters can be auto-approved
+target_default_rate = 0.03        # risk appetite: default rate the bank accepts among auto-approved loans
+decline_min_pd = 0.30             # the AI recommends decline only when sure AND PD is at least this
+min_typicality = 0.01             # applicants more unusual than 99% of training cases: AI defers to the policy path
+# the AI decides only for kinds of applicant its training data contains (salary / pension, and irregular
+# business income); for others (students, farmers, gig workers) it is advisory: the expert policy decides,
+# and a confident AI warning sends an approval to an officer
+ai_decides_for = ["Salaried (private sector)", "Government employee", "Pensioner", "Self-employed / business owner"]
+# cautions that always need an officer (possible fraud, contradictions, product limits); other cautions
+# become conditions of an AI approval (documents to verify)
+force_refer = ["tamper", "integrity", "file_origin", "profile_match", "pass_through", "consistency", "holders",
+               "holder_match", "income_support", "evidence", "recency", "salary_trend", "affordability",
+               "take_home", "loan_size", "student_limits", "own_contribution", "eligibility", "security",
+               "bureau"]
+# expected loss and risk-based pricing (indicative)
+lgd = 0.65                        # loss given default, unsecured retail
+cost_of_funds = 0.075
+operating_cost = 0.025
+margin = 0.02
+min_rate = 0.105
+max_rate = 0.26
+
+[security]
+# Collateral lowers the LOSS if a borrower defaults (LGD), not the chance of default; it never replaces the
+# affordability checks. Gold LTV caps: RBI Lending Against Gold and Silver Collateral Directions, 2025.
+gold_ltv = [[250000, 0.85], [500000, 0.80], [1e12, 0.75]]     # [loan amount up to, max loan / gold value]
+gold_no_appraisal_upto = 250000
+deposit_ltv = 0.90                # loan against own fixed deposit (lender setting)
+property_ltv = 0.60               # loan against property (lender setting)
+lgd = { gold = 0.10, deposit = 0.03, property = 0.25 }        # loss given default on the covered part (indicative)
+min_coverage = 0.5                # cover needed before the AI may weigh expected loss instead of PD alone
+secured_max_pd = 0.15             # even fully secured, the AI does not approve above this probability of default
+
+[starter]
+# FAIRScore 3.0 starter-loan ladder. When the AI is UNSURE about the requested loan (conformal set not {repays})
+# but not confident of default, a small first loan keeps the possible loss small while the applicant builds a
+# repayment record (reported to the credit bureaus: their first credit history). Each rung is re-assessed.
+enabled = true
+max_amount = 50000                # first-rung cap (Rs)
+income_multiple = 1.0             # ... and at most this many months of verified income
+terms = [12, 6]                   # first-rung terms tried, in order
+max_pd = 0.12                     # AI default risk at the starter size must be at or below this
+# learning offers: a small, RANDOM, logged share of the cases above max_pd (but below explore_max_pd and never a
+# confident 'defaults') also gets a starter loan, so the bank learns about applicants its policy would otherwise
+# never see (inverse-propensity weighting in retraining; src/exploration_study.py). 0 switches this off.
+explore_share = 0.05
+explore_max_pd = 0.25
+rungs = [[6, 2.0], [12, 4.0]]     # [after N on-time EMIs, limit = multiple of the first rung]; re-assessed each time
+advisory_segments = true          # also suggest (officer confirms) for applicant types the AI is advisory for
+
+[learning]
+# FAIRScore 3.0 learning loop (src/learning_loop.py). Model-risk governance: nothing changes automatically.
+use_adaptation = false            # true: live PDs use models/ai_engine_adaptation.pkl (after committee approval)
+shift_aware_conformal = true      # weighted Mondrian conformal when live applicants differ from training ones
+min_live_applications = 30
+prior_sd = [0.5, 0.25]            # Bayesian recalibration prior (intercept, slope) around "no change"
+challenger_min_outcomes = 200     # a retrained challenger is proposed only after this many outcomes ...
+challenger_min_defaults = 30      # ... including this many defaults
+# Asymmetric autonomy in a new market. The engine learned from Czech loans; on real Indian statements balances
+# sit far lower than anything it saw, so its high-risk readings are not yet trustworthy. Until the model-risk team
+# approves an adaptation fitted on LOCAL repayment outcomes (use_adaptation = true), the AI may recommend
+# approval but never declines on its own: an AI "confident default" becomes a referral with the AI's reasons.
+# Hard-stop rules (bounces, gambling, affordability, forged statements, age) still decline as before.
+ai_decline_needs_local_validation = true
+
+[bureau]
+# Used only when the applicant HAS a bureau record (thin or thick file); new-to-credit applicants are assessed on
+# cash flow alone. A bureau record never replaces the statement checks; it adds hard stops and cautions.
+min_score = 650                   # below: decline (thick file)
+caution_score = 700               # below: officer review
+max_enquiries_6m = 6              # more hard enquiries than this in 6 months: credit hunger, officer review
+dpd30_caution_12m = true          # any 30+ days past due in the last 12 months: officer review
+dpd90_fail_24m = true             # any 90+ days past due / write-off in the last 24 months: decline
+
+[co_applicant]
+# income of a co-applicant (spouse, parent) counts towards affordability once verified
+counts_for_affordability = true
+
+[risk_models]
+# Consensus risk percentile (0 = safest). Models can only send a clean case for review.
+refer_from_percentile = 80
+# Risk level shown to the user
+level_cuts = { Low = 35, Moderate = 65, Elevated = 80 }
+
+[review]
+# Decision confidence below this sends an otherwise-approvable case to an officer.
+min_confidence_to_approve = 0.5
+
+[scorecard]
+# FAIRScore application score, 300-900: an expert (judgemental) scorecard of the kind banks use
+# for new-to-credit customers before they have repayment data. Each factor earns a share of its
+# points (rising with better behaviour, never falling); q = points earned / points available, and
+# score = 300 + 600 * q ^ curve. A curve above 1 spreads the top end, so an applicant who is good
+# on most factors but weak on a key one (affordability, bounces) drops clearly. Recalibrate the
+# points from recorded repayment outcomes with src/train_from_outcomes.py.
+gate_min_score = 600             # below this an otherwise approvable case is referred
+curve = 2.0
+bands = { Excellent = 750, Good = 700, Fair = 650, Weak = 600 }   # below Weak = Poor
+
+[scorecard.max_points]
+conduct = 140            # payments returned unpaid, penalty charges
+affordability = 150      # all EMIs vs income after the new loan
+income_stability = 90    # salary every month / steady inflows
+balance_cover = 70       # average bank balance vs all EMIs
+liquidity = 60           # days at a very low or negative balance
+residual = 80            # money left after spending and the new EMI
+credit_appetite = 60     # number of lenders / loan apps used
+gambling = 40
+savings = 30             # SIPs / investments, balance trend
+evidence = 30            # months of history, reconciliation, file origin
+tenure = 30              # years in current work / business
+cash = 20                # dependence on cash
+bills = 30               # household bills paid month after month (bonus only: none = half marks)
+own_contribution = 40    # share of the item's price paid by the borrower (purchase loans with a price only)
+# Applicant profile (from the form). Directions follow outcomes on 307,511 Home Credit and 233,154 L&T loans:
+# government / pensioners default least, rented homes and large families more, car owners less.
+employment = 40          # how stable the kind of work is
+home_assets = 25         # own home / vehicle (no penalty for living with family beyond renting)
+dependents = 15          # people supported from the same income
+savings_buffer = 20      # declared savings compared with the loan (to be verified)

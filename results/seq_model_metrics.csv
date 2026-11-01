@@ -1,0 +1,5 @@
+model,auc,auc_sd,folds
+a. embedding only (logistic),0.830611910030688,0.04631979416690751,15
+b. tabular engine inputs (CatBoost),0.8716877740573714,0.042508640526056185,15
+c. hybrid: tabular + embedding (CatBoost),0.8762057664144102,0.04658286790219324,15
+"d. GRU from scratch, labels only",0.8311335410739286,0.05007284901351227,5

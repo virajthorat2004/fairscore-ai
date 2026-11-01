@@ -1,0 +1,21 @@
+method,train_fraction,train_clients,train_defaults,auc,ci_low,ci_high
+A. LightGBM on aggregates,0.01,925,23,0.5954863336388361,,
+A. LightGBM on aggregates,0.05,4628,108,0.6525751017569857,,
+A. LightGBM on aggregates,0.2,18513,420,0.6988759842657073,,
+A. LightGBM on aggregates,1.0,92569,2176,0.7478624967637505,0.7314791802836598,0.7634319725060109
+C. pre-trained GRU embedding + logistic,0.01,925,23,0.5879918752831199,,
+D. LightGBM on aggregates + embedding,0.01,925,23,0.6010567538156171,,
+B. GRU from scratch (supervised),0.01,925,23,0.5654459770415456,,
+C2. pre-trained GRU fine-tuned,0.01,925,23,0.570793266341356,,
+C. pre-trained GRU embedding + logistic,0.05,4628,108,0.635487081978226,,
+D. LightGBM on aggregates + embedding,0.05,4628,108,0.6604556528316753,,
+B. GRU from scratch (supervised),0.05,4628,108,0.5700088670739862,,
+C2. pre-trained GRU fine-tuned,0.05,4628,108,0.6196944343601112,,
+C. pre-trained GRU embedding + logistic,0.2,18513,420,0.6615660034788088,,
+D. LightGBM on aggregates + embedding,0.2,18513,420,0.7069253132916486,,
+B. GRU from scratch (supervised),0.2,18513,420,0.6342935886645913,,
+C2. pre-trained GRU fine-tuned,0.2,18513,420,0.6817508798665463,,
+C. pre-trained GRU embedding + logistic,1.0,92569,2176,0.677836389080205,0.6613208656827414,0.694904654915592
+D. LightGBM on aggregates + embedding,1.0,92569,2176,0.7449918314130387,0.7295801128305692,0.7592393262619056
+B. GRU from scratch (supervised),1.0,92569,2176,0.6954302995805866,0.6772271911419531,0.7113210975232792
+C2. pre-trained GRU fine-tuned,1.0,92569,2176,0.7092064328827087,0.6908946878213721,0.7259215031949114

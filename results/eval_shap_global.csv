@@ -1,0 +1,25 @@
+feature,mean_abs_shap,direction_corr,group
+Lowest balance vs income,0.7893770694756538,-0.6883091769597133,Balance kept in the account
+Bills paid regularly,0.29011451367797353,-0.9357201807935362,Saving and bill habits
+Share of income that is regular,0.1948543010296619,-0.908498757978807,Income regularity
+Average balance vs EMI,0.17869638539931673,-0.7245653406007908,Balance kept in the account
+Income regularity score,0.16321393574119394,-0.9306112049453577,Income regularity
+Month-to-month income change,0.15404513461412728,0.9439450170654384,Income regularity
+Money left after spending,0.12064613997591853,-0.9360020153207793,Affordability of the EMI
+All EMIs vs income,0.10163078574752843,0.7216415482293602,Affordability of the EMI
+Days with negative balance,0.09632252852198933,0.6116176296610969,Balance kept in the account
+Loan vs yearly income,0.086255420381979,0.809325767889361,Affordability of the EMI
+New EMI vs income,0.08567172727582133,0.8293654635723079,Affordability of the EMI
+Saving habit,0.08171924196489325,-0.9147060097798411,Saving and bill habits
+Payments returned unpaid,0.06649905054497957,-0.9534547369918523,Repayment conduct
+Times balance went below zero,0.05464365282654719,0.6935630736436658,Balance kept in the account
+Loan length,0.04658942937766921,0.8614592959983887,Affordability of the EMI
+Balance cover score,0.044829467745694886,-0.787195668143529,Balance kept in the account
+Bounce / penalty charges,0.03922226962234611,0.8128689507131094,Repayment conduct
+Affordability score,0.035637390446950384,-0.9772069834537616,Affordability of the EMI
+Statement completeness,0.03289728381822548,-0.8204207280431032,Statement completeness
+"Days with balance under Rs 1,000",0.02151889856350468,0.772432789255596,Balance kept in the account
+Liquidity score,0.019466746888934332,-0.7077627363742451,Balance kept in the account
+Cash dependence,0.004888007812235935,-0.7443736988913219,Saving and bill habits
+Gambling / betting,0.0,0.0,Other borrowing and gambling
+Borrowing from other lenders,0.0,0.0,Other borrowing and gambling
